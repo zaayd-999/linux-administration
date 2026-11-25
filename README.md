@@ -1,49 +1,165 @@
-# Linux Administration
+# Partie 2 : utilisateurs, groupes et privilèges
 
-Deployment, administration, security and automation of an Ubuntu Linux platform for an intelligent software application.
+Fait partie du projet [Linux Administration](../../tree/master). Cette branche met en place une politique d'accès sur le serveur `srv-fz` (Ubuntu Server 26.04.1 LTS) : chaque rôle du projet reçoit un compte, et chaque compte ne dispose que des privilèges nécessaires à son rôle (principe du **moindre privilège**).
 
-## About the project
+## Politique d'accès
 
-The goal is to set up and administer an Ubuntu Server that hosts a software application representing an intelligent system. The project covers the main system administration tasks, built and tested on virtual machines in VirtualBox.
+| Compte | Rôle | Groupe principal | Groupes secondaires | Droits `sudo` | Connexion |
+|---|---|---|---|---|---|
+| `admin` | Administrateur système | `admin` | `sudo` | Tous | Oui |
+| `developer` | Développe l'application | `developer` | `developers` | Aucun | Oui |
+| `operator` | Exploite le service de l'application | `operators` | `systemd-journal` | Démarrer, arrêter et redémarrer `mon-app.service` uniquement | Oui |
+| `appuser` | Compte qui exécute l'application | `appuser` | — | Aucun | Non (`/usr/sbin/nologin`) |
 
-## What the project covers
+- `developer` n'a aucun droit d'administration. Ses droits d'écriture sur le code de l'application sont donnés par le groupe `developers` (Partie 3, permissions).
+- `operator` peut piloter le service de l'application sans être administrateur. Le groupe `systemd-journal` lui permet de lire les journaux sans `sudo`.
+- `appuser` est un compte système : pas de mot de passe, pas de dossier personnel, pas de shell. Personne ne peut ouvrir de session avec ce compte ; il sert uniquement à exécuter l'application.
+- Le compte `elhanafi`, créé à l'installation, reste le compte d'administration personnel.
 
-- Ubuntu Server installation and configuration
-- Users and groups
-- File permissions and ownership
-- File system organization and management
-- Installing and configuring services
-- Process and resource administration
-- Network configuration
-- Server security
-- System log management
-- Backup and restore
-- Automation with Bash scripts
-- Basic system monitoring
-- Application deployment and management
-- Documentation of the infrastructure
+## 1. Créer les groupes et les comptes
 
-## How the repository is organized
+```bash
+# Groupes métier
+sudo groupadd developers
+sudo groupadd operators
 
-This branch gives the general idea of the project. Each step lives on its own branch, with an explanation of what was done and the files needed to configure it. Switch branches on GitHub to browse a step.
+# Comptes humains (-m : dossier personnel, -s : shell, -c : description)
+sudo useradd -m -s /bin/bash -c "Administrateur systeme" admin
+sudo useradd -m -s /bin/bash -c "Developpeur" -G developers developer
+sudo useradd -m -s /bin/bash -c "Operateur exploitation" -g operators -G systemd-journal operator
 
-## Environment
+# Droits d'administration pour admin uniquement
+sudo usermod -aG sudo admin
 
-- Hypervisor: VirtualBox
-- OS: Ubuntu Server
+# Compte de service : compte système, sans dossier personnel ni connexion
+sudo useradd --system --no-create-home --home-dir /opt/mon-projet \
+  --shell /usr/sbin/nologin -c "Compte de service application" appuser
 
-## License
+# Mots de passe des comptes humains (appuser n'en a pas, volontairement)
+sudo passwd admin
+sudo passwd developer
+sudo passwd operator
+```
 
-Copyright (C) 2026 Zaayd
+`-g` fixe le **groupe principal** d'un compte, `-G` ajoute des **groupes secondaires**.
 
-This project is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+## 2. Droits limités pour le groupe `operators`
 
-See the `LICENSE` file for the full text.
+La règle `sudo` du groupe `operators` est placée dans un fichier à part, `/etc/sudoers.d/operators`, plutôt que dans `/etc/sudoers`.
 
-## Acknowledgments
+Une erreur de syntaxe dans un fichier `sudoers` peut bloquer complètement `sudo`. Le fichier est donc écrit dans `/tmp`, vérifié avec `visudo -cf`, puis installé seulement si la vérification réussit :
 
-Thanks to my mentor, Prof. **Abdesalam Ahmadi**, for his guidance and support.
+```bash
+echo '%operators ALL=(root) /usr/bin/systemctl start mon-app.service, /usr/bin/systemctl stop mon-app.service, /usr/bin/systemctl restart mon-app.service' > /tmp/operators
 
-## Author
+visudo -cf /tmp/operators            # doit afficher : parsed OK
+sudo install -o root -g root -m 440 /tmp/operators /etc/sudoers.d/operators
+sudo visudo -c
+rm /tmp/operators
+```
 
-**KAICHE Zayd**, Génie Informatique student at ENSAM Meknès
+Le fichier appartient à `root` avec les droits `440` (lecture seule pour `root` et son groupe), comme l'exige `sudo`.
+
+Le service `mon-app.service` sera créé à la Partie 5. La règle est posée dès maintenant pour que la politique d'accès soit complète.
+
+## 3. Vérification
+
+### Identité et groupes
+
+```bash
+id admin; id developer; id operator; id appuser
+```
+
+```
+uid=1001(admin) gid=1003(admin) groups=1003(admin),27(sudo)
+uid=1002(developer) gid=1004(developer) groups=1004(developer),1001(developers)
+uid=1003(operator) gid=1002(operators) groups=1002(operators),999(systemd-journal)
+uid=999(appuser) gid=984(appuser) groups=984(appuser)
+```
+
+`appuser` a un UID inférieur à 1000 : c'est un compte système, et non un compte humain.
+
+### Droits `sudo` de chaque compte
+
+```bash
+sudo -l -U admin
+sudo -l -U developer
+sudo -l -U operator
+```
+
+```
+User admin may run the following commands on srv-fz:
+    (ALL) ALL
+    (ALL : ALL) ALL
+
+User developer is not allowed to run sudo on srv-fz.
+
+User operator may run the following commands on srv-fz:
+    (root) /usr/bin/systemctl start mon-app.service, /usr/bin/systemctl stop mon-app.service, /usr/bin/systemctl restart mon-app.service
+```
+
+### Le compte de service ne peut pas se connecter
+
+```bash
+sudo su - appuser
+```
+
+```
+This account is currently not available.
+```
+
+### Refus concret pour le développeur
+
+```bash
+su - developer
+sudo apt update
+exit
+```
+
+```
+developer@srv-fz:~$ sudo apt update
+sudo: I'm sorry developer. I'm afraid I can't do that
+```
+
+La commande est refusée : `developer` n'a aucun droit `sudo`. Ce message est propre à sudo-rs ; le `sudo` classique affiche « developer is not in the sudoers file ».
+
+## Bilan
+
+| Compte | Attendu | Obtenu |
+|---|---|---|
+| `admin` | Administration complète | Conforme |
+| `developer` | Aucun droit `sudo` | Conforme |
+| `operator` | Uniquement la gestion de `mon-app.service` | Conforme |
+| `appuser` | Aucune connexion possible | Conforme |
+
+## Remarques
+
+- **Deux règles pour `admin`.** `sudo -l -U admin` affiche deux lignes. La seconde vient du groupe `sudo`. La première vient d'une ancienne règle toujours présente dans `/etc/sudoers` :
+
+  ```
+  %admin ALL=(ALL) ALL
+  %sudo  ALL=(ALL:ALL) ALL
+  ```
+
+  Le compte `admin` en profite parce que son groupe principal s'appelle `admin`. Ce n'est pas gênant ici, mais cela montre qu'un simple nom de groupe peut donner des privilèges : il faut vérifier les règles existantes avant de nommer un groupe.
+- **sudo-rs.** Depuis Ubuntu 25.10, la commande `sudo` est fournie par sudo-rs, une réécriture en Rust. Ses messages diffèrent un peu de ceux du `sudo` classique (par exemple l'invite `[sudo: authenticate] Password:`), et son `visudo -c` ne liste pas les fichiers de `/etc/sudoers.d/`. La règle des opérateurs est bien prise en compte, comme le montre `sudo -l -U operator`.
+
+## Problèmes rencontrés
+
+| Problème | Cause | Solution |
+|---|---|---|
+| `useradd: group operator exists` à la création du compte `operator` | Ubuntu possède déjà un groupe système `operator`, et `useradd` veut créer un groupe portant le nom du nouvel utilisateur | Donner `operators` comme groupe principal avec `-g operators` |
+| `visudo` : `syntax error: expected host name` | Le collage dans l'éditeur a échoué et inséré des caractères parasites | Écrire la règle dans `/tmp` avec `echo`, la vérifier avec `visudo -cf`, puis l'installer avec `install -m 440` |
+| `passwd: Authentication token manipulation error` | Les deux saisies du mot de passe ne correspondaient pas | Relancer `sudo passwd admin` |
+
+## Environnement
+
+| Élément | Valeur |
+|---|---|
+| Serveur | `srv-fz`, Ubuntu Server 26.04.1 LTS, noyau 7.0.0-44, arm64 |
+| Virtualisation | UTM (QEMU) sur Mac Apple Silicon |
+| Adresse | 192.168.64.50 (statique) |
+
+## Auteur
+
+**El Hanafi Fatima Ezahra**, ENSAM Meknès
