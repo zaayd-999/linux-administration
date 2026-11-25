@@ -204,10 +204,9 @@ network:
       set-name: enp0s3
     enp0s8:
       dhcp4: true
-      dhcp6: true
-      set-name: enp0s8
-      nameservers:
-        search: [ilsi.local, "~50.168.192.in-addr.arpa"]
+      dhcp4-overrides:
+		use-dns: true
+		use-domains: true
   version: 2
 ```
 
