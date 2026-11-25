@@ -186,9 +186,6 @@ network:
       set-name: enp0s3
     enp0s8:
       dhcp4: false
-      dhcp4-overrides:
-		use-dns: true
-		use-domains: true
   version: 2
 ```
 
