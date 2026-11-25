@@ -186,6 +186,10 @@ network:
       set-name: enp0s3
     enp0s8:
       dhcp4: false
+      addresses:
+        - 192.168.50.10/24
+      nameservers:
+        search: [ilsi.local, "~50.168.192.in-addr.arpa"]
   version: 2
 ```
 
