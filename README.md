@@ -161,6 +161,11 @@ subnet 192.168.50.0 netmask 255.255.255.0 {
    option domain-name "ilsi.local";
    option domain-name-servers 192.168.50.10;
 }
+
+host hostname {
+	hardware ethernet 00:11:22:33:44:55;
+	fixed-address 192.168.50.201;
+}
 ```
 
 The file shown here keeps only the active settings. The default Ubuntu file also contains many commented examples, which are left out.
